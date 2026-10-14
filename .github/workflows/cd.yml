@@ -1,0 +1,102 @@
+name: Application CD
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Render deployment Compose
+        env:
+          ECR_IMAGE: ${{ vars.ECR_REPOSITORY }}:${{ github.sha }}
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          source = Path("deploy/docker-compose.yml").read_text()
+
+          if source.count("__ECR_IMAGE__") != 1:
+            raise SystemExit("Expected exactly one ECR image placeholder")
+
+          if os.environ["ECR_IMAGE"].startswith(":"):
+            raise SystemExit("ECR_REPOSITORY is not configured")
+
+          rendered = source.replace(
+            "__ECR_IMAGE__",
+            os.environ["ECR_IMAGE"]
+          )
+
+          Path("deploy/docker-compose.rendered.yml").write_text(rendered)
+          PY
+
+      - name: Deploy Compose via SSM
+        env:
+            EC2_INSTANCE_ID: ${{ vars.EC2_INSTANCE_ID }}
+        run: |
+          set -euo pipefail
+
+          : "${EC2_INSTANCE_ID:?EC2_INSTANCE_ID is not configured}"
+
+          python3 - <<'PY'
+          import base64
+          import json
+          from pathlib import Path
+
+          compose = Path("deploy/docker-compose.rendered.yml").read_bytes()
+          encoded = base64.b64encode(compose).decode("ascii")
+
+          commands = [
+            "set -eu",
+            "mkdir -p /opt/ghostfolio",
+            'tmp="$(mktemp /opt/ghostfolio/.docker-compose.XXXXXX)"',
+            "trap 'rm -f \"$tmp\"' EXIT",
+            f"printf '%s' '{encoded}' | base64 -d > \"$tmp\"",
+            'chmod 644 "$tmp"',
+            'mv -f "$tmp" /opt/ghostfolio/docker-compose.yml',
+          ]
+
+          Path("ssm-parameters.json").write_text(
+            json.dumps({"commands": commands})
+          )
+          PY
+
+          COMMAND_ID=$(aws ssm send-command \
+            --document-name "AWS-RunShellScript" \
+            --instance-ids "$EC2_INSTANCE_ID" \
+            --parameters file://ssm-parameters.json \
+            --comment "Deploy Ghostfolio Compose" \
+            --query 'Command.CommandId' \
+            --output text)
+
+          echo "SSM Command ID: $COMMAND_ID"
+
+          if ! aws ssm wait command-executed \
+            --command-id "$COMMAND_ID" \
+            --instance-id "$EC2_INSTANCE_ID"; then
+
+            aws ssm get-command-invocation \
+              --command-id "$COMMAND_ID" \
+              --instance-id "$EC2_INSTANCE_ID" || true
+
+            exit 1
+          fi
+
+          aws ssm get-command-invocation \
+            --command-id "$COMMAND_ID" \
+            --instance-id "$EC2_INSTANCE_ID" \
+            --query '{Status:Status,Output:StandardOutputContent,Errors:StandardErrorContent}'
