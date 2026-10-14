@@ -1,0 +1,92 @@
+name: Application CI
+
+on:
+  pull_request:
+    branches:
+      - dev
+
+  push:
+    branches:
+      - dev
+      - master
+      - 'feat/**'
+      - 'feature/**'
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Configure AWS Credentials
+        if: github.event_name == 'push'
+        uses: aws-actions/configure-aws-credentials@v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        if: github.event_name == 'push'
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build Docker image for PR
+        if: github.event_name == 'pull_request'
+        run: |
+          docker build \
+          -t ghostfolio:${{ github.sha }} \
+          .
+
+      - name: Build Docker image for ECR
+        if: github.event_name == 'push'
+        run: |
+          docker build \
+          -t ${{ vars.ECR_REPOSITORY }}:${{ github.sha }} \
+          .
+      - name: Push Docker image
+        if: github.event_name == 'push'
+        run: |
+          docker push ${{ vars.ECR_REPOSITORY }}:${{ github.sha }}
+
+
+      - name: Push dev tag
+        if: github.ref_name == 'dev'
+        run: |
+          docker tag \
+            ${{ vars.ECR_REPOSITORY }}:${{ github.sha }} \
+            ${{ vars.ECR_REPOSITORY }}:dev
+
+          docker push ${{ vars.ECR_REPOSITORY }}:dev
+
+      - name: Push master tag
+        if: github.ref_name == 'master'
+        run: |
+          docker tag \
+            ${{ vars.ECR_REPOSITORY }}:${{ github.sha }} \
+            ${{ vars.ECR_REPOSITORY }}:master
+
+          docker push ${{ vars.ECR_REPOSITORY }}:master
+
+      - name: Push release tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          docker tag \
+            ${{ vars.ECR_REPOSITORY }}:${{ github.sha }} \
+            ${{ vars.ECR_REPOSITORY }}:${{ github.ref_name }}
+
+          docker push ${{ vars.ECR_REPOSITORY }}:${{ github.ref_name }}
+    
+  deploy:
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+    uses: ./.github/workflows/cd.yml
+    permissions:
+      contents: read
+      id-token: write
