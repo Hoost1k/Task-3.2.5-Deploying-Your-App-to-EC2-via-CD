@@ -2,8 +2,7 @@ name: Application CI
 
 on:
   pull_request:
-    branches:
-      - dev
+    branches: [dev, master]
 
   push:
     branches:
