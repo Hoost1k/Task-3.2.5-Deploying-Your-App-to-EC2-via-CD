@@ -24,6 +24,13 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    logging:
+      driver: awslogs
+      options:
+        awslogs-region: eu-central-1
+        awslogs-group: /ghostfolio/application
+        awslogs-stream: ghostfolio-ec2
+        awslogs-create-group: "false"
 
   postgres:
     image: docker.io/library/postgres:15
