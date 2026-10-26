@@ -18,11 +18,13 @@ import { RedisCacheService } from './redis-cache.service';
         const redisPassword = encodeURIComponent(
           configurationService.get('REDIS_PASSWORD')
         );
+        const redisProtocol =
+          process.env.REDIS_TLS === 'true' ? 'rediss' : 'redis';
 
         return {
           store: redisStore,
           ttl: configurationService.get('CACHE_TTL'),
-          url: `redis://${redisPassword ? `:${redisPassword}` : ''}@${configurationService.get('REDIS_HOST')}:${configurationService.get('REDIS_PORT')}/${configurationService.get('REDIS_DB')}`
+          url: `${redisProtocol}://${redisPassword ? `:${redisPassword}` : ''}@${configurationService.get('REDIS_HOST')}:${configurationService.get('REDIS_PORT')}/${configurationService.get('REDIS_DB')}`
         } as RedisClientOptions;
       }
     }),
