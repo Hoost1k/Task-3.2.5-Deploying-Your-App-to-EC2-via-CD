@@ -25,7 +25,6 @@ services:
       options:
         awslogs-region: eu-central-1
         awslogs-group: /ghostfolio/application
-        awslogs-stream: ghostfolio-ec2
         awslogs-create-group: "false"
 
 volumes:
